@@ -1,6 +1,10 @@
 # Build
 /target
 
+# Bundle
+*.app
+assets/AppIcon.icns
+
 # IDE
 .idea/
 .vscode/
