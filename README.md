@@ -79,6 +79,10 @@ gtop/
 - [sysinfo](https://crates.io/crates/sysinfo) — System information gathering
 - [battery](https://crates.io/crates/battery) — Cross-platform battery monitoring
 
+## Acknowledgements
+
+This project is built on top of [gpui-component](https://github.com/longbridge/gpui-component) by [Longbridge](https://longbridge.com). Thanks for the excellent GPUI component library that makes building native desktop UIs in Rust a joy.
+
 ## Contributing
 
 Contributions are welcome! Please feel free to open an issue or submit a pull request.
