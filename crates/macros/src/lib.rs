@@ -123,7 +123,7 @@ pub fn icon_named(input: TokenStream) -> TokenStream {
         let filename = entry.file_name().to_string_lossy().to_string();
         if filename.ends_with(".svg") {
             let variant_name = pascal_case(&filename);
-            let path = format!("icons/{}", filename);
+            let path = format!("icons/{filename}");
             entries.push((variant_name, path));
         }
     }

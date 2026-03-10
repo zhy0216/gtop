@@ -123,12 +123,12 @@ impl SystemMonitor {
     }
 
     fn smoothed_metrics(&self) -> SmoothedMetrics {
-        let (disk_used, disk_total) =
-            self.disk_info
-                .iter()
-                .fold((0u64, 0u64), |(used, total), d| {
-                    (used + d.used, total + d.total)
-                });
+        let (disk_used, disk_total) = self
+            .disk_info
+            .iter()
+            .fold((0u64, 0u64), |(used, total), d| {
+                (used + d.used, total + d.total)
+            });
 
         let total_swap = self.sys.total_swap() as f64;
         let used_swap = self.sys.used_swap() as f64;
