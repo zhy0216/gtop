@@ -1,3 +1,5 @@
+#![allow(clippy::all)]
+
 use gpui::{App, SharedString};
 use std::ops::Deref;
 
