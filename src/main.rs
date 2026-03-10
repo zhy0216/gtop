@@ -12,7 +12,7 @@ use gpui_component::{
     v_flex,
 };
 use smol::Timer;
-use sysinfo::{Disks, Networks, Pid, Signal, System};
+use sysinfo::{Components, Disks, Networks, Pid, Signal, System};
 
 actions!(system_monitor, [Quit]);
 
@@ -329,6 +329,7 @@ pub struct SystemMonitor {
     sys: System,
     disks: Disks,
     networks: Networks,
+    components: Components,
     data: VecDeque<MetricPoint>,
     time_index: usize,
     active_tab: MonitorTab,
@@ -337,6 +338,7 @@ pub struct SystemMonitor {
     disk_info: Vec<DiskInfo>,
     battery_info: Vec<BatteryInfo>,
     cpu_cores: Vec<CpuCoreUsage>,
+    cpu_temp: Option<f32>,
     net_stats: NetworkStats,
     process_filter: String,
     // Smoothing
@@ -353,6 +355,7 @@ impl SystemMonitor {
 
         let disks = Disks::new_with_refreshed_list();
         let networks = Networks::new_with_refreshed_list();
+        let components = Components::new_with_refreshed_list();
 
         let process_delegate = ProcessTableDelegate::new();
         let process_table = cx.new(|cx| {
@@ -365,6 +368,7 @@ impl SystemMonitor {
             sys,
             disks,
             networks,
+            components,
             data: VecDeque::with_capacity(MAX_DATA_POINTS),
             time_index: 0,
             active_tab: MonitorTab::System,
@@ -373,6 +377,7 @@ impl SystemMonitor {
             disk_info: Vec::new(),
             battery_info: Vec::new(),
             cpu_cores: Vec::new(),
+            cpu_temp: None,
             net_stats: NetworkStats {
                 rx_bytes_per_sec: 0,
                 tx_bytes_per_sec: 0,
@@ -471,6 +476,7 @@ impl SystemMonitor {
         self.sys.refresh_processes(sysinfo::ProcessesToUpdate::All, true);
         self.disks.refresh(true);
         self.networks.refresh(true);
+        self.components.refresh(true);
 
         // CPU
         let cpu_usage = self.sys.global_cpu_usage() as f64;
@@ -505,6 +511,17 @@ impl SystemMonitor {
             rx_bytes_per_sec: rx_total,
             tx_bytes_per_sec: tx_total,
         };
+
+        // CPU temperature - find the first CPU-related sensor
+        self.cpu_temp = self
+            .components
+            .list()
+            .iter()
+            .filter(|c| {
+                let label = c.label().to_lowercase();
+                label.contains("cpu") || label.contains("soc") || label.contains("die")
+            })
+            .find_map(|c| c.temperature());
 
         // Smoothing targets
         self.target_cpu = cpu_usage;
@@ -793,10 +810,11 @@ impl SystemMonitor {
         let metrics = self.smoothed_metrics();
         let primary_battery = self.battery_info.first();
         let uptime = System::uptime();
+        let cpu_temp = self.cpu_temp;
 
         h_flex()
             .px_4()
-            .gap_5()
+            .gap_4()
             .h_7()
             .text_xs()
             .items_center()
@@ -807,7 +825,7 @@ impl SystemMonitor {
             .text_color(cx.theme().muted_foreground)
             .child(
                 h_flex()
-                    .gap_5()
+                    .gap_4()
                     .child(
                         h_flex()
                             .gap_1p5()
@@ -826,7 +844,12 @@ impl SystemMonitor {
                                         .h(px(3.))
                                         .value(metrics.disk_percent),
                                 )
-                                .child(format!("{:.0}%", metrics.disk_percent)),
+                                .child(
+                                    div()
+                                        .w(px(28.))
+                                        .text_right()
+                                        .child(format!("{:.0}%", metrics.disk_percent)),
+                                ),
                         )
                     })
                     .child({
@@ -840,7 +863,12 @@ impl SystemMonitor {
                                     .h(px(3.))
                                     .value(metrics.memory as f32),
                             )
-                            .child(format!("{:.0}%", metrics.memory))
+                            .child(
+                                div()
+                                    .w(px(28.))
+                                    .text_right()
+                                    .child(format!("{:.0}%", metrics.memory)),
+                            )
                     })
                     .child({
                         h_flex()
@@ -853,7 +881,32 @@ impl SystemMonitor {
                                     .h(px(3.))
                                     .value(metrics.cpu as f32),
                             )
-                            .child(format!("{:.0}%", metrics.cpu))
+                            .child(
+                                div()
+                                    .w(px(28.))
+                                    .text_right()
+                                    .child(format!("{:.0}%", metrics.cpu)),
+                            )
+                    })
+                    .when_some(cpu_temp, |this, temp| {
+                        this.child(
+                            h_flex()
+                                .gap_1p5()
+                                .items_center()
+                                .child(
+                                    div()
+                                        .w(px(42.))
+                                        .text_right()
+                                        .text_color(if temp > 80.0 {
+                                            cx.theme().red
+                                        } else if temp > 60.0 {
+                                            cx.theme().yellow
+                                        } else {
+                                            cx.theme().muted_foreground
+                                        })
+                                        .child(format!("{:.0}°C", temp)),
+                                ),
+                        )
                     })
                     .child({
                         h_flex()
