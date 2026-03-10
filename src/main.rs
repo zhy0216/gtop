@@ -6,6 +6,8 @@ use gpui_component::{
     ActiveTheme, Icon, IconName, Root, Sizable, Theme, TitleBar,
     chart::AreaChart,
     h_flex,
+    input::{Input, InputEvent, InputState},
+    menu::PopupMenuItem,
     progress::Progress,
     tab::{Tab, TabBar},
     table::{Column, ColumnSort, DataTable, TableDelegate, TableState},
@@ -188,17 +190,6 @@ impl ProcessTableDelegate {
             }
         }
     }
-
-    fn kill_process(&self, row_ix: usize, sys: &System) -> Option<(Pid, String, bool)> {
-        let process = self.filtered_processes.get(row_ix)?;
-        let pid = process.pid;
-        let name = process.name.clone();
-        let success = sys
-            .process(pid)
-            .map(|p| p.kill_with(Signal::Term).unwrap_or(false))
-            .unwrap_or(false);
-        Some((pid, name, success))
-    }
 }
 
 impl TableDelegate for ProcessTableDelegate {
@@ -274,6 +265,32 @@ impl TableDelegate for ProcessTableDelegate {
         };
         self.sort_processes();
     }
+
+    fn context_menu(
+        &mut self,
+        row_ix: usize,
+        menu: gpui_component::menu::PopupMenu,
+        _window: &mut Window,
+        _cx: &mut Context<TableState<Self>>,
+    ) -> gpui_component::menu::PopupMenu {
+        if let Some(process) = self.filtered_processes.get(row_ix) {
+            let pid = process.pid;
+            let name = process.name.clone();
+            menu.item(
+                PopupMenuItem::new(format!("Kill \"{}\" (PID {})", name, pid)).on_click(
+                    move |_, _window, _cx| {
+                        let mut sys = System::new();
+                        sys.refresh_processes(sysinfo::ProcessesToUpdate::All, true);
+                        if let Some(process) = sys.process(pid) {
+                            let _ = process.kill_with(Signal::Term);
+                        }
+                    },
+                ),
+            )
+        } else {
+            menu
+        }
+    }
 }
 
 fn format_bytes(bytes: u64) -> String {
@@ -341,6 +358,7 @@ pub struct SystemMonitor {
     cpu_temp: Option<f32>,
     net_stats: NetworkStats,
     process_filter: String,
+    filter_input: Entity<InputState>,
     // Smoothing
     target_cpu: f64,
     target_memory: f64,
@@ -364,6 +382,18 @@ impl SystemMonitor {
                 .col_movable(false)
         });
 
+        let filter_input = cx.new(|cx| {
+            InputState::new(window, cx).placeholder("Search processes...")
+        });
+
+        cx.subscribe(&filter_input, |this: &mut Self, _, event: &InputEvent, cx| {
+            if matches!(event, InputEvent::Change) {
+                let text = this.filter_input.read(cx).value();
+                this.on_filter_changed(&text, cx);
+            }
+        })
+        .detach();
+
         let mut monitor = Self {
             sys,
             disks,
@@ -383,6 +413,7 @@ impl SystemMonitor {
                 tx_bytes_per_sec: 0,
             },
             process_filter: String::new(),
+            filter_input,
             target_cpu: 0.0,
             target_memory: 0.0,
             display_cpu: 0.0,
@@ -604,16 +635,6 @@ impl SystemMonitor {
         cx.notify();
     }
 
-    fn kill_selected_process(&mut self, row_ix: usize, cx: &mut Context<Self>) {
-        let result = self.process_table.update(cx, |table, _cx| {
-            table.delegate_mut().kill_process(row_ix, &self.sys)
-        });
-        if let Some((_pid, _name, _success)) = result {
-            // Process killed, will disappear on next refresh
-            cx.notify();
-        }
-    }
-
     fn render_chart(
         &self,
         title: &str,
@@ -783,14 +804,21 @@ impl SystemMonitor {
                     .border_b_1()
                     .border_color(cx.theme().border.opacity(0.5))
                     .child(
-                        Icon::new(IconName::Search)
-                            .xsmall()
-                            .text_color(cx.theme().muted_foreground),
+                        Input::new(&self.filter_input)
+                            .prefix(
+                                Icon::new(IconName::Search)
+                                    .xsmall()
+                                    .text_color(cx.theme().muted_foreground),
+                            )
+                            .cleanable(true)
+                            .small()
+                            .appearance(false),
                     )
                     .child(
                         div()
                             .text_xs()
                             .text_color(cx.theme().muted_foreground)
+                            .flex_shrink_0()
                             .child(if self.process_filter.is_empty() {
                                 format!("{} processes", total_count)
                             } else {
