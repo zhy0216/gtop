@@ -2,7 +2,6 @@ use std::collections::VecDeque;
 use std::time::Duration;
 
 use gpui::{actions, prelude::FluentBuilder as _, *};
-use gpui_component::ThemeMode;
 use gpui_component::{
     ActiveTheme, Icon, IconName, Root, Sizable, Theme, TitleBar,
     chart::AreaChart,
@@ -18,8 +17,9 @@ use sysinfo::{Disks, Pid, System};
 // Define the Quit action
 actions!(system_monitor, [Quit]);
 
-const INTERVAL: Duration = Duration::from_millis(500);
+const INTERVAL: Duration = Duration::from_millis(1000);
 const MAX_DATA_POINTS: usize = 120;
+const TAB_FADE_DURATION: Duration = Duration::from_millis(200);
 
 /// Tab indices
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -255,6 +255,13 @@ fn format_bytes(bytes: u64) -> String {
     }
 }
 
+/// Smoothly interpolated metric values for display
+struct SmoothedMetrics {
+    cpu: f64,
+    memory: f64,
+    disk_percent: f32,
+}
+
 /// System monitor that collects and displays real-time metrics
 pub struct SystemMonitor {
     sys: System,
@@ -262,9 +269,15 @@ pub struct SystemMonitor {
     data: VecDeque<MetricPoint>,
     time_index: usize,
     active_tab: MonitorTab,
+    tab_switch_counter: usize,
     process_table: Entity<TableState<ProcessTableDelegate>>,
     disk_info: Vec<DiskInfo>,
     battery_info: Vec<BatteryInfo>,
+    // Smoothing targets and current displayed values
+    target_cpu: f64,
+    target_memory: f64,
+    display_cpu: f64,
+    display_memory: f64,
 }
 
 impl SystemMonitor {
@@ -288,15 +301,20 @@ impl SystemMonitor {
             data: VecDeque::with_capacity(MAX_DATA_POINTS),
             time_index: 0,
             active_tab: MonitorTab::System,
+            tab_switch_counter: 0,
             process_table,
             disk_info: Vec::new(),
             battery_info: Vec::new(),
+            target_cpu: 0.0,
+            target_memory: 0.0,
+            display_cpu: 0.0,
+            display_memory: 0.0,
         };
 
         // Collect initial data
         monitor.collect_metrics(cx);
 
-        // Start the update loop
+        // Data collection loop (less frequent, sets targets)
         cx.spawn(async move |this, cx| {
             loop {
                 Timer::after(INTERVAL).await;
@@ -313,7 +331,72 @@ impl SystemMonitor {
         })
         .detach();
 
+        // Smooth interpolation loop (60fps-ish for smooth transitions)
+        cx.spawn(async move |this, cx| {
+            loop {
+                Timer::after(Duration::from_millis(33)).await; // ~30fps
+
+                let result = this.update(cx, |this, cx| {
+                    let changed = this.interpolate_values();
+                    if changed {
+                        cx.notify();
+                    }
+                });
+
+                if result.is_err() {
+                    break;
+                }
+            }
+        })
+        .detach();
+
         monitor
+    }
+
+    /// Smoothly interpolate displayed values toward targets
+    fn interpolate_values(&mut self) -> bool {
+        const LERP_SPEED: f64 = 0.15;
+        const EPSILON: f64 = 0.05;
+
+        let mut changed = false;
+
+        if (self.display_cpu - self.target_cpu).abs() > EPSILON {
+            self.display_cpu += (self.target_cpu - self.display_cpu) * LERP_SPEED;
+            changed = true;
+        } else if self.display_cpu != self.target_cpu {
+            self.display_cpu = self.target_cpu;
+            changed = true;
+        }
+
+        if (self.display_memory - self.target_memory).abs() > EPSILON {
+            self.display_memory += (self.target_memory - self.display_memory) * LERP_SPEED;
+            changed = true;
+        } else if self.display_memory != self.target_memory {
+            self.display_memory = self.target_memory;
+            changed = true;
+        }
+
+        changed
+    }
+
+    fn smoothed_metrics(&self) -> SmoothedMetrics {
+        let disk_percent = self
+            .disk_info
+            .first()
+            .map(|d| {
+                if d.total > 0 {
+                    (d.used as f64 / d.total as f64 * 100.0) as f32
+                } else {
+                    0.0
+                }
+            })
+            .unwrap_or(0.0);
+
+        SmoothedMetrics {
+            cpu: self.display_cpu,
+            memory: self.display_memory,
+            disk_percent,
+        }
     }
 
     fn collect_metrics(&mut self, cx: &mut Context<Self>) {
@@ -332,6 +415,10 @@ impl SystemMonitor {
         } else {
             0.0
         };
+
+        // Set interpolation targets
+        self.target_cpu = cpu_usage;
+        self.target_memory = memory_usage;
 
         // Create data point
         let point = MetricPoint {
@@ -353,7 +440,7 @@ impl SystemMonitor {
             cx.notify();
         });
 
-        // Update disk info (take first disk for status bar)
+        // Update disk info
         self.disk_info = self
             .disks
             .iter()
@@ -396,8 +483,12 @@ impl SystemMonitor {
     }
 
     fn set_active_tab(&mut self, index: usize, _window: &mut Window, cx: &mut Context<Self>) {
-        self.active_tab = MonitorTab::from_index(index);
-        cx.notify();
+        let new_tab = MonitorTab::from_index(index);
+        if new_tab != self.active_tab {
+            self.active_tab = new_tab;
+            self.tab_switch_counter += 1;
+            cx.notify();
+        }
     }
 
     fn render_chart(
@@ -408,20 +499,25 @@ impl SystemMonitor {
         color: Hsla,
         cx: &Context<Self>,
     ) -> impl IntoElement {
+        let radius = cx.theme().radius;
         v_flex()
-            .min_h(px(160.))
+            .min_h(px(180.))
             .flex_1()
-            .gap_2()
+            .gap_1()
+            .rounded(radius)
             .border_1()
-            .border_color(cx.theme().border)
+            .border_color(cx.theme().border.opacity(0.6))
+            .bg(cx.theme().secondary.opacity(0.3))
+            .overflow_hidden()
             .child(
                 h_flex()
                     .justify_between()
-                    .py_1()
+                    .py_1p5()
                     .px_3()
                     .child(
                         div()
                             .text_sm()
+                            .font_weight(FontWeight::MEDIUM)
                             .text_color(cx.theme().foreground)
                             .child(title.to_string()),
                     )
@@ -429,6 +525,7 @@ impl SystemMonitor {
                         let current_value = data.last().map(&value_fn).unwrap_or(0.0);
                         div()
                             .text_sm()
+                            .font_weight(FontWeight::SEMIBOLD)
                             .text_color(color)
                             .child(format!("{:.1}%", current_value))
                     }),
@@ -440,8 +537,8 @@ impl SystemMonitor {
                     .stroke(color)
                     .fill(linear_gradient(
                         0.,
-                        linear_color_stop(color.opacity(0.4), 1.),
-                        linear_color_stop(cx.theme().background.opacity(0.1), 0.),
+                        linear_color_stop(color.opacity(0.25), 1.),
+                        linear_color_stop(cx.theme().background.opacity(0.05), 0.),
                     ))
                     .tick_margin(15),
             )
@@ -449,18 +546,15 @@ impl SystemMonitor {
 
     fn render_system_tab(&self, cx: &Context<Self>) -> impl IntoElement {
         let data: Vec<MetricPoint> = self.data.iter().cloned().collect();
+        // macOS Activity Monitor style: green for CPU, blue for memory
+        let cpu_color = hsla(0.33, 0.75, 0.45, 1.0); // system green
+        let mem_color = hsla(0.58, 0.80, 0.50, 1.0); // system blue
         v_flex()
-            .p_3()
+            .p_4()
             .gap_4()
             .flex_1()
-            .child(self.render_chart("CPU Usage", data.clone(), |d| d.cpu, cx.theme().red, cx))
-            .child(self.render_chart(
-                "Memory Usage",
-                data.clone(),
-                |d| d.memory,
-                cx.theme().blue,
-                cx,
-            ))
+            .child(self.render_chart("CPU Usage", data.clone(), |d| d.cpu, cpu_color, cx))
+            .child(self.render_chart("Memory Usage", data.clone(), |d| d.memory, mem_color, cx))
     }
 
     fn render_processes_tab(&self, _cx: &Context<Self>) -> impl IntoElement {
@@ -473,76 +567,72 @@ impl SystemMonitor {
     }
 
     fn render_status_bar(&self, cx: &Context<Self>) -> impl IntoElement {
-        let primary_disk = self.disk_info.first();
+        let metrics = self.smoothed_metrics();
         let primary_battery = self.battery_info.first();
 
         h_flex()
-            .px_3()
-            .gap_4()
+            .px_4()
+            .gap_5()
             .h_7()
-            .text_sm()
+            .text_xs()
             .items_center()
             .justify_between()
             .border_t_1()
-            .border_color(cx.theme().border)
-            .bg(cx.theme().tab_bar)
+            .border_color(cx.theme().border.opacity(0.5))
+            .bg(cx.theme().background)
             .text_color(cx.theme().muted_foreground)
             .child(
                 h_flex()
-                    .gap_4()
-                    // Disk info
-                    .when_some(primary_disk, |this, disk| {
-                        let used_percent = if disk.total > 0 {
-                            (disk.used as f64 / disk.total as f64 * 100.0) as f32
-                        } else {
-                            0.0
-                        };
+                    .gap_5()
+                    .when(self.disk_info.first().is_some(), |this| {
                         this.child(
                             h_flex()
-                                .gap_2()
-                                .w(px(135.))
+                                .gap_1p5()
                                 .items_center()
-                                .child(Icon::new(IconName::HardDrive))
+                                .child(Icon::new(IconName::HardDrive).xsmall())
                                 .child(
                                     Progress::new("status-disk")
                                         .w_12()
-                                        .h_2()
-                                        .value(used_percent),
+                                        .h(px(3.))
+                                        .value(metrics.disk_percent),
                                 )
-                                .child(format!("{:.0}%", used_percent)),
+                                .child(format!("{:.0}%", metrics.disk_percent)),
                         )
                     })
-                    // Memory info
                     .child({
-                        let mem_percent = self.data.back().map(|p| p.memory as f32).unwrap_or(0.0);
                         h_flex()
-                            .gap_2()
-                            .w(px(135.))
+                            .gap_1p5()
                             .items_center()
-                            .child(Icon::new(IconName::MemoryStick))
-                            .child(Progress::new("status-mem").w_12().h_2().value(mem_percent))
-                            .child(format!("{:.0}%", mem_percent))
+                            .child(Icon::new(IconName::MemoryStick).xsmall())
+                            .child(
+                                Progress::new("status-mem")
+                                    .w_12()
+                                    .h(px(3.))
+                                    .value(metrics.memory as f32),
+                            )
+                            .child(format!("{:.0}%", metrics.memory))
                     })
-                    // CPU info
                     .child({
-                        let cpu_percent = self.data.back().map(|p| p.cpu as f32).unwrap_or(0.0);
                         h_flex()
-                            .gap_2()
-                            .w(px(135.))
+                            .gap_1p5()
                             .items_center()
-                            .child(Icon::new(IconName::Cpu))
-                            .child(Progress::new("status-cpu").w_12().h_2().value(cpu_percent))
-                            .child(format!("{:.0}%", cpu_percent))
+                            .child(Icon::new(IconName::Cpu).xsmall())
+                            .child(
+                                Progress::new("status-cpu")
+                                    .w_12()
+                                    .h(px(3.))
+                                    .value(metrics.cpu as f32),
+                            )
+                            .child(format!("{:.0}%", metrics.cpu))
                     }),
             )
             .child(
-                // Battery info
                 div().when_some(primary_battery, |this, battery| {
                     this.child(
                         h_flex()
-                            .gap_2()
+                            .gap_1p5()
                             .items_center()
-                            .child(Icon::new(battery.icon.clone()))
+                            .child(Icon::new(battery.icon.clone()).xsmall())
                             .child(format!("{:.0}%", battery.percentage)),
                     )
                 }),
@@ -553,9 +643,11 @@ impl SystemMonitor {
 impl Render for SystemMonitor {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let active_tab_index = self.active_tab as usize;
+        let tab_anim_id = format!("tab-fade-{}", self.tab_switch_counter);
 
         v_flex()
             .size_full()
+            .bg(cx.theme().background)
             .child(
                 TitleBar::new()
                     .child(
@@ -578,20 +670,39 @@ impl Render for SystemMonitor {
                             .text_xs()
                             .text_color(cx.theme().muted_foreground)
                             .child(format!(
-                                "{:.1} GB",
+                                "{:.1} GB RAM",
                                 self.sys.total_memory() as f64 / 1024.0 / 1024.0 / 1024.0
                             )),
                     ),
             )
-            .bg(cx.theme().background)
             .child(
                 div()
                     .id("tab-content")
                     .flex_1()
                     .overflow_y_scroll()
                     .map(|this| match self.active_tab {
-                        MonitorTab::System => this.child(self.render_system_tab(cx)),
-                        MonitorTab::Processes => this.child(self.render_processes_tab(cx)),
+                        MonitorTab::System => this.child(
+                            div()
+                                .size_full()
+                                .child(self.render_system_tab(cx))
+                                .with_animation(
+                                    ElementId::Name(tab_anim_id.clone().into()),
+                                    Animation::new(TAB_FADE_DURATION)
+                                        .with_easing(ease_in_out),
+                                    |el, delta| el.opacity(delta),
+                                ),
+                        ),
+                        MonitorTab::Processes => this.child(
+                            div()
+                                .size_full()
+                                .child(self.render_processes_tab(cx))
+                                .with_animation(
+                                    ElementId::Name(tab_anim_id.clone().into()),
+                                    Animation::new(TAB_FADE_DURATION)
+                                        .with_easing(ease_in_out),
+                                    |el, delta| el.opacity(delta),
+                                ),
+                        ),
                     }),
             )
             .child(self.render_status_bar(cx))
@@ -627,7 +738,8 @@ fn main() {
                 window.activate_window();
                 window.set_window_title("System Monitor");
 
-                Theme::change(ThemeMode::Dark, Some(window), cx);
+                // Follow macOS system appearance (light/dark)
+                Theme::sync_system_appearance(Some(window), cx);
 
                 let view = cx.new(|cx| SystemMonitor::new(window, cx));
                 cx.new(|cx| Root::new(view, window, cx))
