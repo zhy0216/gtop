@@ -243,7 +243,9 @@ impl Notification {
 
         // Dismiss the notification after 0.15s to show the animation.
         cx.spawn(async move |view, cx| {
-            cx.background_executor().timer(Duration::from_secs_f32(0.15)).await;
+            cx.background_executor()
+                .timer(Duration::from_secs_f32(0.15))
+                .await;
             cx.update(|cx| {
                 if let Some(view) = view.upgrade() {
                     view.update(cx, |view, cx| {

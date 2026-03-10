@@ -115,7 +115,10 @@ impl DialogButtonProps {
         let on_ok = self.on_ok.clone();
         let on_close = self.on_close.clone();
 
-        let ok_text = self.ok_text.clone().unwrap_or_else(|| t!("Dialog.ok").into());
+        let ok_text = self
+            .ok_text
+            .clone()
+            .unwrap_or_else(|| t!("Dialog.ok").into());
         let ok_variant = self.ok_variant;
 
         Button::new("ok")
@@ -138,7 +141,10 @@ impl DialogButtonProps {
     pub(crate) fn render_cancel(&self, _: &mut Window, _: &mut App) -> AnyElement {
         let on_cancel = self.on_cancel.clone();
         let on_close = self.on_close.clone();
-        let cancel_text = self.cancel_text.clone().unwrap_or_else(|| t!("Dialog.cancel").into());
+        let cancel_text = self
+            .cancel_text
+            .clone()
+            .unwrap_or_else(|| t!("Dialog.cancel").into());
         let cancel_variant = self.cancel_variant;
 
         Button::new("cancel")
@@ -446,7 +452,10 @@ impl RenderOnce for Dialog {
                 window_paddings.left + window_paddings.right,
                 window_paddings.top + window_paddings.bottom,
             );
-        let bounds = Bounds { origin: Point::default(), size: view_size };
+        let bounds = Bounds {
+            origin: Point::default(),
+            size: view_size,
+        };
         let offset_top = px(layer_ix as f32 * 16.);
         let y = self.props.margin_top.unwrap_or(view_size.height / 10.) + offset_top;
         let x = bounds.center().x - self.props.width / 2.;
@@ -489,24 +498,26 @@ impl RenderOnce for Dialog {
                             return this;
                         }
 
-                        this.window_control_area(WindowControlArea::Drag).on_any_mouse_down({
-                            let on_cancel = on_cancel.clone();
-                            let on_close = on_close.clone();
-                            move |event, window, cx| {
-                                if event.position.y < TITLE_BAR_HEIGHT {
-                                    return;
-                                }
+                        this.window_control_area(WindowControlArea::Drag)
+                            .on_any_mouse_down({
+                                let on_cancel = on_cancel.clone();
+                                let on_close = on_close.clone();
+                                move |event, window, cx| {
+                                    if event.position.y < TITLE_BAR_HEIGHT {
+                                        return;
+                                    }
 
-                                cx.stop_propagation();
-                                if self.props.overlay_closable && event.button == MouseButton::Left
-                                {
-                                    if on_cancel(&ClickEvent::default(), window, cx) {
-                                        on_close(&ClickEvent::default(), window, cx);
-                                        window.close_dialog(cx);
+                                    cx.stop_propagation();
+                                    if self.props.overlay_closable
+                                        && event.button == MouseButton::Left
+                                    {
+                                        if on_cancel(&ClickEvent::default(), window, cx) {
+                                            on_close(&ClickEvent::default(), window, cx);
+                                            window.close_dialog(cx);
+                                        }
                                     }
                                 }
-                            }
-                        })
+                            })
                     })
                     .child(
                         v_flex()

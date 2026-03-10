@@ -7,9 +7,7 @@ use gpui::{
 use ropey::Rope;
 use smallvec::SmallVec;
 
-use crate::input::{
-    LastLayout, Point as TreeSitterPoint, RopeExt, WhitespaceIndicators,
-};
+use crate::input::{LastLayout, Point as TreeSitterPoint, RopeExt, WhitespaceIndicators};
 
 /// A line with soft wrapped lines info.
 #[derive(Debug, Clone)]
@@ -34,7 +32,6 @@ impl LineItem {
     pub(crate) fn lines_len(&self) -> usize {
         self.wrapped_lines.len()
     }
-
 }
 
 #[derive(Debug, Default)]

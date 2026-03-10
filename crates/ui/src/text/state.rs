@@ -1,8 +1,5 @@
-use std::{
-    pin::Pin,
-    task::Poll,
-};
 use futures::Stream as _;
+use std::{pin::Pin, task::Poll};
 
 use gpui::{
     App, AppContext as _, Bounds, ClipboardItem, Context, FocusHandle, IntoElement, KeyBinding,
@@ -12,7 +9,7 @@ use gpui::{
 
 use crate::{
     ActiveTheme, ElementExt,
-    async_util::{Sender, Receiver, unbounded},
+    async_util::{Receiver, Sender, unbounded},
     highlighter::HighlightTheme,
     input::{self, Copy},
     text::{
@@ -385,7 +382,10 @@ struct UpdateOptions {
     highlight_theme: std::sync::Arc<HighlightTheme>,
 }
 
-fn parse_content(format: TextViewFormat, options: &UpdateOptions) -> Result<ParsedContent, SharedString> {
+fn parse_content(
+    format: TextViewFormat,
+    options: &UpdateOptions,
+) -> Result<ParsedContent, SharedString> {
     let mut node_cx = NodeContext {
         ..NodeContext::default()
     };

@@ -382,16 +382,18 @@ impl SystemMonitor {
                 .col_movable(false)
         });
 
-        let filter_input = cx.new(|cx| {
-            InputState::new(window, cx).placeholder("Search processes...")
-        });
+        let filter_input =
+            cx.new(|cx| InputState::new(window, cx).placeholder("Search processes..."));
 
-        cx.subscribe(&filter_input, |this: &mut Self, _, event: &InputEvent, cx| {
-            if matches!(event, InputEvent::Change) {
-                let text = this.filter_input.read(cx).value();
-                this.on_filter_changed(&text, cx);
-            }
-        })
+        cx.subscribe(
+            &filter_input,
+            |this: &mut Self, _, event: &InputEvent, cx| {
+                if matches!(event, InputEvent::Change) {
+                    let text = this.filter_input.read(cx).value();
+                    this.on_filter_changed(&text, cx);
+                }
+            },
+        )
         .detach();
 
         let mut monitor = Self {
@@ -504,7 +506,8 @@ impl SystemMonitor {
     fn collect_metrics(&mut self, cx: &mut Context<Self>) {
         self.sys.refresh_cpu_all();
         self.sys.refresh_memory();
-        self.sys.refresh_processes(sysinfo::ProcessesToUpdate::All, true);
+        self.sys
+            .refresh_processes(sysinfo::ProcessesToUpdate::All, true);
         self.disks.refresh(true);
         self.networks.refresh(true);
         self.components.refresh(true);
@@ -707,33 +710,31 @@ impl SystemMonitor {
                     .pb_2()
                     .child(format!("CPU Cores ({})", core_count)),
             )
-            .child(
-                div().flex().flex_row().flex_wrap().gap_1().children(
-                    self.cpu_cores.iter().enumerate().map(|(i, core)| {
-                        let intensity = core.usage / 100.0;
-                        let color = hsla(
-                            0.33 - intensity * 0.33, // green → red
-                            0.75,
-                            0.35 + intensity * 0.15,
-                            1.0,
-                        );
+            .child(div().flex().flex_row().flex_wrap().gap_1().children(
+                self.cpu_cores.iter().enumerate().map(|(i, core)| {
+                    let intensity = core.usage / 100.0;
+                    let color = hsla(
+                        0.33 - intensity * 0.33, // green → red
+                        0.75,
+                        0.35 + intensity * 0.15,
+                        1.0,
+                    );
 
-                        div()
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .w(px(52.))
-                            .h(px(24.))
-                            .rounded(px(4.))
-                            .bg(color.opacity(0.15))
-                            .border_1()
-                            .border_color(color.opacity(0.3))
-                            .text_xs()
-                            .text_color(color)
-                            .child(format!("{}: {:.0}%", i, core.usage))
-                    }),
-                ),
-            )
+                    div()
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .w(px(52.))
+                        .h(px(24.))
+                        .rounded(px(4.))
+                        .bg(color.opacity(0.15))
+                        .border_1()
+                        .border_color(color.opacity(0.3))
+                        .text_xs()
+                        .text_color(color)
+                        .child(format!("{}: {:.0}%", i, core.usage))
+                }),
+            ))
     }
 
     fn render_network_stats(&self, cx: &Context<Self>) -> impl IntoElement {
@@ -752,12 +753,19 @@ impl SystemMonitor {
                     .gap_2()
                     .flex_1()
                     .items_center()
-                    .child(Icon::new(IconName::ArrowDown).xsmall().text_color(hsla(0.58, 0.80, 0.50, 1.0)))
+                    .child(
+                        Icon::new(IconName::ArrowDown)
+                            .xsmall()
+                            .text_color(hsla(0.58, 0.80, 0.50, 1.0)),
+                    )
                     .child(
                         div()
                             .text_sm()
                             .text_color(cx.theme().foreground)
-                            .child(format!("Down: {}", format_rate(self.net_stats.rx_bytes_per_sec))),
+                            .child(format!(
+                                "Down: {}",
+                                format_rate(self.net_stats.rx_bytes_per_sec)
+                            )),
                     ),
             )
             .child(
@@ -765,12 +773,19 @@ impl SystemMonitor {
                     .gap_2()
                     .flex_1()
                     .items_center()
-                    .child(Icon::new(IconName::ArrowUp).xsmall().text_color(hsla(0.33, 0.75, 0.45, 1.0)))
+                    .child(
+                        Icon::new(IconName::ArrowUp)
+                            .xsmall()
+                            .text_color(hsla(0.33, 0.75, 0.45, 1.0)),
+                    )
                     .child(
                         div()
                             .text_sm()
                             .text_color(cx.theme().foreground)
-                            .child(format!("Up: {}", format_rate(self.net_stats.tx_bytes_per_sec))),
+                            .child(format!(
+                                "Up: {}",
+                                format_rate(self.net_stats.tx_bytes_per_sec)
+                            )),
                     ),
             )
     }
@@ -790,7 +805,12 @@ impl SystemMonitor {
     }
 
     fn render_processes_tab(&self, cx: &Context<Self>) -> impl IntoElement {
-        let process_count = self.process_table.read(cx).delegate().filtered_processes.len();
+        let process_count = self
+            .process_table
+            .read(cx)
+            .delegate()
+            .filtered_processes
+            .len();
         let total_count = self.process_table.read(cx).delegate().all_processes.len();
 
         v_flex()
@@ -918,22 +938,19 @@ impl SystemMonitor {
                     })
                     .when_some(cpu_temp, |this, temp| {
                         this.child(
-                            h_flex()
-                                .gap_1p5()
-                                .items_center()
-                                .child(
-                                    div()
-                                        .w(px(42.))
-                                        .text_right()
-                                        .text_color(if temp > 80.0 {
-                                            cx.theme().red
-                                        } else if temp > 60.0 {
-                                            cx.theme().yellow
-                                        } else {
-                                            cx.theme().muted_foreground
-                                        })
-                                        .child(format!("{:.0}°C", temp)),
-                                ),
+                            h_flex().gap_1p5().items_center().child(
+                                div()
+                                    .w(px(42.))
+                                    .text_right()
+                                    .text_color(if temp > 80.0 {
+                                        cx.theme().red
+                                    } else if temp > 60.0 {
+                                        cx.theme().yellow
+                                    } else {
+                                        cx.theme().muted_foreground
+                                    })
+                                    .child(format!("{:.0}°C", temp)),
+                            ),
                         )
                     })
                     .child({
@@ -949,17 +966,15 @@ impl SystemMonitor {
                             ))
                     }),
             )
-            .child(
-                div().when_some(primary_battery, |this, battery| {
-                    this.child(
-                        h_flex()
-                            .gap_1p5()
-                            .items_center()
-                            .child(Icon::new(battery.icon.clone()).xsmall())
-                            .child(format!("{:.0}%", battery.percentage)),
-                    )
-                }),
-            )
+            .child(div().when_some(primary_battery, |this, battery| {
+                this.child(
+                    h_flex()
+                        .gap_1p5()
+                        .items_center()
+                        .child(Icon::new(battery.icon.clone()).xsmall())
+                        .child(format!("{:.0}%", battery.percentage)),
+                )
+            }))
     }
 }
 
@@ -1010,8 +1025,7 @@ impl Render for SystemMonitor {
                                 .child(self.render_system_tab(cx))
                                 .with_animation(
                                     ElementId::Name(tab_anim_id.clone().into()),
-                                    Animation::new(TAB_FADE_DURATION)
-                                        .with_easing(ease_in_out),
+                                    Animation::new(TAB_FADE_DURATION).with_easing(ease_in_out),
                                     |el, delta| el.opacity(delta),
                                 ),
                         ),
@@ -1021,8 +1035,7 @@ impl Render for SystemMonitor {
                                 .child(self.render_processes_tab(cx))
                                 .with_animation(
                                     ElementId::Name(tab_anim_id.clone().into()),
-                                    Animation::new(TAB_FADE_DURATION)
-                                        .with_easing(ease_in_out),
+                                    Animation::new(TAB_FADE_DURATION).with_easing(ease_in_out),
                                     |el, delta| el.opacity(delta),
                                 ),
                         ),

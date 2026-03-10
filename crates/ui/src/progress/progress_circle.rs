@@ -6,8 +6,8 @@ use gpui::{
     relative,
 };
 use gpui::{Bounds, div};
-use std::f32::consts::TAU;
 use instant::Duration;
+use std::f32::consts::TAU;
 
 use super::ProgressState;
 use crate::plot::shape::{Arc, ArcData};

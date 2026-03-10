@@ -3,8 +3,8 @@ use gpui::{
     ParentElement, Pixels, Render, RenderOnce, StatefulInteractiveElement, StyleRefinement, Styled,
     Task, Window, div, prelude::FluentBuilder as _,
 };
-use std::rc::Rc;
 use instant::Duration;
+use std::rc::Rc;
 
 use crate::{Anchor, ElementExt, StyledExt as _, popover::Popover};
 
