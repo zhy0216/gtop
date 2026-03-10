@@ -15,7 +15,7 @@ use gpui_component::{
 use smol::Timer;
 use sysinfo::{Components, Disks, Networks, System};
 
-use crate::formatting::{format_bytes, format_rate, format_uptime};
+use crate::formatting::{format_rate, format_uptime};
 use crate::models::*;
 use crate::process_table::ProcessTableDelegate;
 
@@ -589,13 +589,9 @@ impl SystemMonitor {
                                 )
                                 .child(
                                     div()
-                                        .w(px(80.))
+                                        .w(px(28.))
                                         .text_right()
-                                        .child(format!(
-                                            "{} / {}",
-                                            format_bytes(metrics.disk_used),
-                                            format_bytes(metrics.disk_total)
-                                        )),
+                                        .child(format!("{:.0}%", disk_percent)),
                                 ),
                         )
                     })
