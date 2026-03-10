@@ -11,6 +11,8 @@
 
 <!-- Add a screenshot here: ![screenshot](./assets/screenshot.png) -->
 
+![System Monitor](assets/screenshot-system.png)
+
 </div>
 
 ---
@@ -70,7 +72,9 @@ gtop/
 
 ## Screenshots
 
-> TODO: Add screenshots of the System tab and Processes tab
+| System | Processes |
+|--------|-----------|
+| ![System](assets/screenshot-system.png) | ![Processes](assets/screenshot-processes.png) |
 
 ## Built With
 
