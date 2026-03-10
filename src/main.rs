@@ -297,11 +297,11 @@ fn format_rate(bytes_per_sec: u64) -> String {
     const MB: u64 = KB * 1024;
 
     if bytes_per_sec >= MB {
-        format!("{:.1} MB/s", bytes_per_sec as f64 / MB as f64)
+        format!("{:>5.1} MB/s", bytes_per_sec as f64 / MB as f64)
     } else if bytes_per_sec >= KB {
-        format!("{:.1} KB/s", bytes_per_sec as f64 / KB as f64)
+        format!("{:>5.1} KB/s", bytes_per_sec as f64 / KB as f64)
     } else {
-        format!("{} B/s", bytes_per_sec)
+        format!("{:>5} B/s", bytes_per_sec)
     }
 }
 
@@ -858,6 +858,7 @@ impl SystemMonitor {
                     .child({
                         h_flex()
                             .gap_1p5()
+                            .w(px(170.))
                             .items_center()
                             .child(Icon::new(IconName::Network).xsmall())
                             .child(format!(
