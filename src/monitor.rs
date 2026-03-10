@@ -19,7 +19,7 @@ use crate::formatting::{format_rate, format_uptime};
 use crate::models::*;
 use crate::process_table::ProcessTableDelegate;
 
-const INTERVAL: Duration = Duration::from_millis(1000);
+const INTERVAL: Duration = Duration::from_millis(3000);
 const MAX_DATA_POINTS: usize = 120;
 const TAB_FADE_DURATION: Duration = Duration::from_millis(200);
 
@@ -40,9 +40,7 @@ pub struct SystemMonitor {
     net_stats: NetworkStats,
     process_filter: String,
     filter_input: Entity<InputState>,
-    // Smoothing
-    target_cpu: f64,
-    target_memory: f64,
+    // Display values
     display_cpu: f64,
     display_memory: f64,
     // Network rate tracking
@@ -99,8 +97,6 @@ impl SystemMonitor {
             },
             process_filter: String::new(),
             filter_input,
-            target_cpu: 0.0,
-            target_memory: 0.0,
             display_cpu: 0.0,
             display_memory: 0.0,
             last_collect_time: Instant::now(),
@@ -123,48 +119,7 @@ impl SystemMonitor {
         })
         .detach();
 
-        // Smooth interpolation loop
-        cx.spawn(async move |this, cx| {
-            loop {
-                Timer::after(Duration::from_millis(33)).await;
-                let result = this.update(cx, |this, cx| {
-                    if this.interpolate_values() {
-                        cx.notify();
-                    }
-                });
-                if result.is_err() {
-                    break;
-                }
-            }
-        })
-        .detach();
-
         monitor
-    }
-
-    fn interpolate_values(&mut self) -> bool {
-        const LERP_SPEED: f64 = 0.15;
-        const EPSILON: f64 = 0.05;
-
-        let mut changed = false;
-
-        if (self.display_cpu - self.target_cpu).abs() > EPSILON {
-            self.display_cpu += (self.target_cpu - self.display_cpu) * LERP_SPEED;
-            changed = true;
-        } else if self.display_cpu != self.target_cpu {
-            self.display_cpu = self.target_cpu;
-            changed = true;
-        }
-
-        if (self.display_memory - self.target_memory).abs() > EPSILON {
-            self.display_memory += (self.target_memory - self.display_memory) * LERP_SPEED;
-            changed = true;
-        } else if self.display_memory != self.target_memory {
-            self.display_memory = self.target_memory;
-            changed = true;
-        }
-
-        changed
     }
 
     fn smoothed_metrics(&self) -> SmoothedMetrics {
@@ -198,8 +153,10 @@ impl SystemMonitor {
 
         self.sys.refresh_cpu_all();
         self.sys.refresh_memory();
-        self.sys
-            .refresh_processes(sysinfo::ProcessesToUpdate::All, true);
+        if self.active_tab == MonitorTab::Processes {
+            self.sys
+                .refresh_processes(sysinfo::ProcessesToUpdate::All, true);
+        }
         self.disks.refresh(true);
         self.networks.refresh(true);
         self.components.refresh(true);
@@ -250,9 +207,9 @@ impl SystemMonitor {
             })
             .find_map(|c| c.temperature());
 
-        // Smoothing targets
-        self.target_cpu = cpu_usage;
-        self.target_memory = memory_usage;
+        // Update display values directly
+        self.display_cpu = cpu_usage;
+        self.display_memory = memory_usage;
 
         let point = MetricPoint {
             time: format!("{}s", self.time_index),
