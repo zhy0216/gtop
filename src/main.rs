@@ -12,16 +12,14 @@ use gpui_component::{
     v_flex,
 };
 use smol::Timer;
-use sysinfo::{Disks, Pid, System};
+use sysinfo::{Disks, Networks, Pid, Signal, System};
 
-// Define the Quit action
 actions!(system_monitor, [Quit]);
 
 const INTERVAL: Duration = Duration::from_millis(1000);
 const MAX_DATA_POINTS: usize = 120;
 const TAB_FADE_DURATION: Duration = Duration::from_millis(200);
 
-/// Tab indices
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 enum MonitorTab {
     #[default]
@@ -39,7 +37,6 @@ impl MonitorTab {
     }
 }
 
-/// A single data point for system metrics
 #[derive(Clone)]
 struct MetricPoint {
     time: String,
@@ -47,7 +44,17 @@ struct MetricPoint {
     memory: f64,
 }
 
-/// Process info for display
+#[derive(Clone)]
+struct CpuCoreUsage {
+    usage: f32,
+}
+
+#[derive(Clone)]
+struct NetworkStats {
+    rx_bytes_per_sec: u64,
+    tx_bytes_per_sec: u64,
+}
+
 #[derive(Clone)]
 struct ProcessInfo {
     pid: Pid,
@@ -56,16 +63,13 @@ struct ProcessInfo {
     memory: u64,
 }
 
-/// Disk info for display
 #[derive(Clone)]
 struct DiskInfo {
-    #[allow(dead_code)]
     name: String,
     total: u64,
     used: u64,
 }
 
-/// Battery info for display
 #[derive(Clone)]
 struct BatteryInfo {
     #[allow(dead_code)]
@@ -74,7 +78,6 @@ struct BatteryInfo {
     percentage: f32,
 }
 
-/// Sort field for processes
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 enum ProcessSortField {
     Pid,
@@ -84,9 +87,10 @@ enum ProcessSortField {
     Memory,
 }
 
-/// Process table delegate
 struct ProcessTableDelegate {
-    processes: Vec<ProcessInfo>,
+    all_processes: Vec<ProcessInfo>,
+    filtered_processes: Vec<ProcessInfo>,
+    filter_text: String,
     columns: Vec<Column>,
     sort_field: ProcessSortField,
     sort_order: ColumnSort,
@@ -95,10 +99,12 @@ struct ProcessTableDelegate {
 impl ProcessTableDelegate {
     fn new() -> Self {
         Self {
-            processes: Vec::new(),
+            all_processes: Vec::new(),
+            filtered_processes: Vec::new(),
+            filter_text: String::new(),
             columns: vec![
                 Column::new("pid", "PID").width(70.).sortable(),
-                Column::new("name", "Name").width(380.).sortable(),
+                Column::new("name", "Name").width(300.).sortable(),
                 Column::new("cpu", "CPU %")
                     .width(80.)
                     .sortable()
@@ -111,7 +117,7 @@ impl ProcessTableDelegate {
     }
 
     fn update_processes(&mut self, sys: &System) {
-        self.processes = sys
+        self.all_processes = sys
             .processes()
             .iter()
             .map(|(pid, process)| ProcessInfo {
@@ -122,6 +128,30 @@ impl ProcessTableDelegate {
             })
             .collect();
 
+        self.apply_filter_and_sort();
+    }
+
+    fn set_filter(&mut self, text: String) {
+        self.filter_text = text;
+        self.apply_filter_and_sort();
+    }
+
+    fn apply_filter_and_sort(&mut self) {
+        if self.filter_text.is_empty() {
+            self.filtered_processes = self.all_processes.clone();
+        } else {
+            let filter = self.filter_text.to_lowercase();
+            self.filtered_processes = self
+                .all_processes
+                .iter()
+                .filter(|p| {
+                    p.name.to_lowercase().contains(&filter)
+                        || p.pid.as_u32().to_string().contains(&filter)
+                })
+                .cloned()
+                .collect();
+        }
+
         self.sort_processes();
     }
 
@@ -130,19 +160,19 @@ impl ProcessTableDelegate {
 
         match self.sort_field {
             ProcessSortField::Pid => {
-                self.processes.sort_by(|a, b| {
+                self.filtered_processes.sort_by(|a, b| {
                     let cmp = a.pid.as_u32().cmp(&b.pid.as_u32());
                     if is_descending { cmp.reverse() } else { cmp }
                 });
             }
             ProcessSortField::Name => {
-                self.processes.sort_by(|a, b| {
+                self.filtered_processes.sort_by(|a, b| {
                     let cmp = a.name.to_lowercase().cmp(&b.name.to_lowercase());
                     if is_descending { cmp.reverse() } else { cmp }
                 });
             }
             ProcessSortField::Cpu => {
-                self.processes.sort_by(|a, b| {
+                self.filtered_processes.sort_by(|a, b| {
                     let cmp = a
                         .cpu_usage
                         .partial_cmp(&b.cpu_usage)
@@ -151,15 +181,23 @@ impl ProcessTableDelegate {
                 });
             }
             ProcessSortField::Memory => {
-                self.processes.sort_by(|a, b| {
+                self.filtered_processes.sort_by(|a, b| {
                     let cmp = a.memory.cmp(&b.memory);
                     if is_descending { cmp.reverse() } else { cmp }
                 });
             }
         }
+    }
 
-        // Keep top 200 processes
-        self.processes.truncate(200);
+    fn kill_process(&self, row_ix: usize, sys: &System) -> Option<(Pid, String, bool)> {
+        let process = self.filtered_processes.get(row_ix)?;
+        let pid = process.pid;
+        let name = process.name.clone();
+        let success = sys
+            .process(pid)
+            .map(|p| p.kill_with(Signal::Term).unwrap_or(false))
+            .unwrap_or(false);
+        Some((pid, name, success))
     }
 }
 
@@ -169,7 +207,7 @@ impl TableDelegate for ProcessTableDelegate {
     }
 
     fn rows_count(&self, _cx: &App) -> usize {
-        self.processes.len()
+        self.filtered_processes.len()
     }
 
     fn column(&self, col_ix: usize, _cx: &App) -> Column {
@@ -183,7 +221,7 @@ impl TableDelegate for ProcessTableDelegate {
         _window: &mut Window,
         cx: &mut Context<TableState<Self>>,
     ) -> impl IntoElement {
-        let Some(process) = self.processes.get(row_ix) else {
+        let Some(process) = self.filtered_processes.get(row_ix) else {
             return div().into_any_element();
         };
 
@@ -238,7 +276,6 @@ impl TableDelegate for ProcessTableDelegate {
     }
 }
 
-/// Format bytes to human readable string
 fn format_bytes(bytes: u64) -> String {
     const KB: u64 = 1024;
     const MB: u64 = KB * 1024;
@@ -255,17 +292,43 @@ fn format_bytes(bytes: u64) -> String {
     }
 }
 
-/// Smoothly interpolated metric values for display
+fn format_rate(bytes_per_sec: u64) -> String {
+    const KB: u64 = 1024;
+    const MB: u64 = KB * 1024;
+
+    if bytes_per_sec >= MB {
+        format!("{:.1} MB/s", bytes_per_sec as f64 / MB as f64)
+    } else if bytes_per_sec >= KB {
+        format!("{:.1} KB/s", bytes_per_sec as f64 / KB as f64)
+    } else {
+        format!("{} B/s", bytes_per_sec)
+    }
+}
+
+fn format_uptime(secs: u64) -> String {
+    let days = secs / 86400;
+    let hours = (secs % 86400) / 3600;
+    let mins = (secs % 3600) / 60;
+
+    if days > 0 {
+        format!("{}d {}h {}m", days, hours, mins)
+    } else if hours > 0 {
+        format!("{}h {}m", hours, mins)
+    } else {
+        format!("{}m", mins)
+    }
+}
+
 struct SmoothedMetrics {
     cpu: f64,
     memory: f64,
     disk_percent: f32,
 }
 
-/// System monitor that collects and displays real-time metrics
 pub struct SystemMonitor {
     sys: System,
     disks: Disks,
+    networks: Networks,
     data: VecDeque<MetricPoint>,
     time_index: usize,
     active_tab: MonitorTab,
@@ -273,7 +336,10 @@ pub struct SystemMonitor {
     process_table: Entity<TableState<ProcessTableDelegate>>,
     disk_info: Vec<DiskInfo>,
     battery_info: Vec<BatteryInfo>,
-    // Smoothing targets and current displayed values
+    cpu_cores: Vec<CpuCoreUsage>,
+    net_stats: NetworkStats,
+    process_filter: String,
+    // Smoothing
     target_cpu: f64,
     target_memory: f64,
     display_cpu: f64,
@@ -286,8 +352,8 @@ impl SystemMonitor {
         sys.refresh_all();
 
         let disks = Disks::new_with_refreshed_list();
+        let networks = Networks::new_with_refreshed_list();
 
-        // Create process table
         let process_delegate = ProcessTableDelegate::new();
         let process_table = cx.new(|cx| {
             TableState::new(process_delegate, window, cx)
@@ -298,6 +364,7 @@ impl SystemMonitor {
         let mut monitor = Self {
             sys,
             disks,
+            networks,
             data: VecDeque::with_capacity(MAX_DATA_POINTS),
             time_index: 0,
             active_tab: MonitorTab::System,
@@ -305,25 +372,28 @@ impl SystemMonitor {
             process_table,
             disk_info: Vec::new(),
             battery_info: Vec::new(),
+            cpu_cores: Vec::new(),
+            net_stats: NetworkStats {
+                rx_bytes_per_sec: 0,
+                tx_bytes_per_sec: 0,
+            },
+            process_filter: String::new(),
             target_cpu: 0.0,
             target_memory: 0.0,
             display_cpu: 0.0,
             display_memory: 0.0,
         };
 
-        // Collect initial data
         monitor.collect_metrics(cx);
 
-        // Data collection loop (less frequent, sets targets)
+        // Data collection loop
         cx.spawn(async move |this, cx| {
             loop {
                 Timer::after(INTERVAL).await;
-
                 let result = this.update(cx, |this, cx| {
                     this.collect_metrics(cx);
                     cx.notify();
                 });
-
                 if result.is_err() {
                     break;
                 }
@@ -331,18 +401,15 @@ impl SystemMonitor {
         })
         .detach();
 
-        // Smooth interpolation loop (60fps-ish for smooth transitions)
+        // Smooth interpolation loop
         cx.spawn(async move |this, cx| {
             loop {
-                Timer::after(Duration::from_millis(33)).await; // ~30fps
-
+                Timer::after(Duration::from_millis(33)).await;
                 let result = this.update(cx, |this, cx| {
-                    let changed = this.interpolate_values();
-                    if changed {
+                    if this.interpolate_values() {
                         cx.notify();
                     }
                 });
-
                 if result.is_err() {
                     break;
                 }
@@ -353,7 +420,6 @@ impl SystemMonitor {
         monitor
     }
 
-    /// Smoothly interpolate displayed values toward targets
     fn interpolate_values(&mut self) -> bool {
         const LERP_SPEED: f64 = 0.15;
         const EPSILON: f64 = 0.05;
@@ -400,14 +466,26 @@ impl SystemMonitor {
     }
 
     fn collect_metrics(&mut self, cx: &mut Context<Self>) {
-        // Refresh system info
-        self.sys.refresh_all();
+        self.sys.refresh_cpu_all();
+        self.sys.refresh_memory();
+        self.sys.refresh_processes(sysinfo::ProcessesToUpdate::All, true);
         self.disks.refresh(true);
+        self.networks.refresh(true);
 
-        // Calculate CPU usage
+        // CPU
         let cpu_usage = self.sys.global_cpu_usage() as f64;
 
-        // Calculate memory usage
+        // Per-core CPU
+        self.cpu_cores = self
+            .sys
+            .cpus()
+            .iter()
+            .map(|cpu| CpuCoreUsage {
+                usage: cpu.cpu_usage(),
+            })
+            .collect();
+
+        // Memory
         let total_memory = self.sys.total_memory() as f64;
         let used_memory = self.sys.used_memory() as f64;
         let memory_usage = if total_memory > 0.0 {
@@ -416,31 +494,41 @@ impl SystemMonitor {
             0.0
         };
 
-        // Set interpolation targets
+        // Network
+        let mut rx_total: u64 = 0;
+        let mut tx_total: u64 = 0;
+        for (_name, data) in self.networks.list() {
+            rx_total += data.received();
+            tx_total += data.transmitted();
+        }
+        self.net_stats = NetworkStats {
+            rx_bytes_per_sec: rx_total,
+            tx_bytes_per_sec: tx_total,
+        };
+
+        // Smoothing targets
         self.target_cpu = cpu_usage;
         self.target_memory = memory_usage;
 
-        // Create data point
         let point = MetricPoint {
             time: format!("{}s", self.time_index),
             cpu: cpu_usage,
             memory: memory_usage,
         };
 
-        // Add to history
         if self.data.len() >= MAX_DATA_POINTS {
             self.data.pop_front();
         }
         self.data.push_back(point);
         self.time_index += 1;
 
-        // Update process table
+        // Process table
         self.process_table.update(cx, |table, cx| {
             table.delegate_mut().update_processes(&self.sys);
             cx.notify();
         });
 
-        // Update disk info
+        // Disks
         self.disk_info = self
             .disks
             .iter()
@@ -451,7 +539,6 @@ impl SystemMonitor {
             })
             .collect();
 
-        // Update battery info
         self.update_battery_info();
     }
 
@@ -487,6 +574,25 @@ impl SystemMonitor {
         if new_tab != self.active_tab {
             self.active_tab = new_tab;
             self.tab_switch_counter += 1;
+            cx.notify();
+        }
+    }
+
+    fn on_filter_changed(&mut self, text: &SharedString, cx: &mut Context<Self>) {
+        self.process_filter = text.to_string();
+        self.process_table.update(cx, |table, cx| {
+            table.delegate_mut().set_filter(text.to_string());
+            cx.notify();
+        });
+        cx.notify();
+    }
+
+    fn kill_selected_process(&mut self, row_ix: usize, cx: &mut Context<Self>) {
+        let result = self.process_table.update(cx, |table, _cx| {
+            table.delegate_mut().kill_process(row_ix, &self.sys)
+        });
+        if let Some((_pid, _name, _success)) = result {
+            // Process killed, will disappear on next refresh
             cx.notify();
         }
     }
@@ -544,31 +650,149 @@ impl SystemMonitor {
             )
     }
 
-    fn render_system_tab(&self, cx: &Context<Self>) -> impl IntoElement {
-        let data: Vec<MetricPoint> = self.data.iter().cloned().collect();
-        // macOS Activity Monitor style: green for CPU, blue for memory
-        let cpu_color = hsla(0.33, 0.75, 0.45, 1.0); // system green
-        let mem_color = hsla(0.58, 0.80, 0.50, 1.0); // system blue
+    fn render_cpu_cores(&self, cx: &Context<Self>) -> impl IntoElement {
+        let radius = cx.theme().radius;
+        let core_count = self.cpu_cores.len();
+
         v_flex()
-            .p_4()
-            .gap_4()
-            .flex_1()
-            .child(self.render_chart("CPU Usage", data.clone(), |d| d.cpu, cpu_color, cx))
-            .child(self.render_chart("Memory Usage", data.clone(), |d| d.memory, mem_color, cx))
+            .gap_1()
+            .rounded(radius)
+            .border_1()
+            .border_color(cx.theme().border.opacity(0.6))
+            .bg(cx.theme().secondary.opacity(0.3))
+            .p_3()
+            .child(
+                div()
+                    .text_sm()
+                    .font_weight(FontWeight::MEDIUM)
+                    .text_color(cx.theme().foreground)
+                    .pb_2()
+                    .child(format!("CPU Cores ({})", core_count)),
+            )
+            .child(
+                div().flex().flex_row().flex_wrap().gap_1().children(
+                    self.cpu_cores.iter().enumerate().map(|(i, core)| {
+                        let intensity = core.usage / 100.0;
+                        let color = hsla(
+                            0.33 - intensity * 0.33, // green → red
+                            0.75,
+                            0.35 + intensity * 0.15,
+                            1.0,
+                        );
+
+                        div()
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .w(px(52.))
+                            .h(px(24.))
+                            .rounded(px(4.))
+                            .bg(color.opacity(0.15))
+                            .border_1()
+                            .border_color(color.opacity(0.3))
+                            .text_xs()
+                            .text_color(color)
+                            .child(format!("{}: {:.0}%", i, core.usage))
+                    }),
+                ),
+            )
     }
 
-    fn render_processes_tab(&self, _cx: &Context<Self>) -> impl IntoElement {
-        v_flex().size_full().child(
-            DataTable::new(&self.process_table)
-                .bordered(false)
-                .stripe(true)
-                .small(),
-        )
+    fn render_network_stats(&self, cx: &Context<Self>) -> impl IntoElement {
+        let radius = cx.theme().radius;
+
+        h_flex()
+            .gap_4()
+            .rounded(radius)
+            .border_1()
+            .border_color(cx.theme().border.opacity(0.6))
+            .bg(cx.theme().secondary.opacity(0.3))
+            .px_3()
+            .py_2()
+            .child(
+                h_flex()
+                    .gap_2()
+                    .flex_1()
+                    .items_center()
+                    .child(Icon::new(IconName::ArrowDown).xsmall().text_color(hsla(0.58, 0.80, 0.50, 1.0)))
+                    .child(
+                        div()
+                            .text_sm()
+                            .text_color(cx.theme().foreground)
+                            .child(format!("Down: {}", format_rate(self.net_stats.rx_bytes_per_sec))),
+                    ),
+            )
+            .child(
+                h_flex()
+                    .gap_2()
+                    .flex_1()
+                    .items_center()
+                    .child(Icon::new(IconName::ArrowUp).xsmall().text_color(hsla(0.33, 0.75, 0.45, 1.0)))
+                    .child(
+                        div()
+                            .text_sm()
+                            .text_color(cx.theme().foreground)
+                            .child(format!("Up: {}", format_rate(self.net_stats.tx_bytes_per_sec))),
+                    ),
+            )
+    }
+
+    fn render_system_tab(&self, cx: &Context<Self>) -> impl IntoElement {
+        let data: Vec<MetricPoint> = self.data.iter().cloned().collect();
+        let cpu_color = hsla(0.33, 0.75, 0.45, 1.0);
+        let mem_color = hsla(0.58, 0.80, 0.50, 1.0);
+        v_flex()
+            .p_4()
+            .gap_3()
+            .flex_1()
+            .child(self.render_chart("CPU Usage", data.clone(), |d| d.cpu, cpu_color, cx))
+            .child(self.render_cpu_cores(cx))
+            .child(self.render_chart("Memory Usage", data.clone(), |d| d.memory, mem_color, cx))
+            .child(self.render_network_stats(cx))
+    }
+
+    fn render_processes_tab(&self, cx: &Context<Self>) -> impl IntoElement {
+        let process_count = self.process_table.read(cx).delegate().filtered_processes.len();
+        let total_count = self.process_table.read(cx).delegate().all_processes.len();
+
+        v_flex()
+            .size_full()
+            .child(
+                h_flex()
+                    .px_3()
+                    .py_2()
+                    .gap_3()
+                    .items_center()
+                    .border_b_1()
+                    .border_color(cx.theme().border.opacity(0.5))
+                    .child(
+                        Icon::new(IconName::Search)
+                            .xsmall()
+                            .text_color(cx.theme().muted_foreground),
+                    )
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(cx.theme().muted_foreground)
+                            .child(if self.process_filter.is_empty() {
+                                format!("{} processes", total_count)
+                            } else {
+                                format!("{} / {} processes", process_count, total_count)
+                            }),
+                    ),
+            )
+            .child(
+                DataTable::new(&self.process_table)
+                    .bordered(false)
+                    .stripe(true)
+                    .small(),
+            )
     }
 
     fn render_status_bar(&self, cx: &Context<Self>) -> impl IntoElement {
         let metrics = self.smoothed_metrics();
         let primary_battery = self.battery_info.first();
+        let uptime = System::uptime();
 
         h_flex()
             .px_4()
@@ -584,6 +808,12 @@ impl SystemMonitor {
             .child(
                 h_flex()
                     .gap_5()
+                    .child(
+                        h_flex()
+                            .gap_1p5()
+                            .items_center()
+                            .child(format!("up {}", format_uptime(uptime))),
+                    )
                     .when(self.disk_info.first().is_some(), |this| {
                         this.child(
                             h_flex()
@@ -624,6 +854,17 @@ impl SystemMonitor {
                                     .value(metrics.cpu as f32),
                             )
                             .child(format!("{:.0}%", metrics.cpu))
+                    })
+                    .child({
+                        h_flex()
+                            .gap_1p5()
+                            .items_center()
+                            .child(Icon::new(IconName::Network).xsmall())
+                            .child(format!(
+                                "↓{} ↑{}",
+                                format_rate(self.net_stats.rx_bytes_per_sec),
+                                format_rate(self.net_stats.tx_bytes_per_sec)
+                            ))
                     }),
             )
             .child(
@@ -722,14 +963,13 @@ fn main() {
             KeyBinding::new("alt-f4", Quit, None),
         ]);
 
-        // Handle the Quit action
         cx.on_action(|_: &Quit, cx: &mut App| {
             cx.quit();
         });
 
         let window_options = WindowOptions {
             titlebar: Some(TitleBar::title_bar_options()),
-            window_bounds: Some(WindowBounds::centered(size(px(680.), px(600.)), cx)),
+            window_bounds: Some(WindowBounds::centered(size(px(700.), px(650.)), cx)),
             ..Default::default()
         };
 
@@ -738,7 +978,6 @@ fn main() {
                 window.activate_window();
                 window.set_window_title("System Monitor");
 
-                // Follow macOS system appearance (light/dark)
                 Theme::sync_system_appearance(Some(window), cx);
 
                 let view = cx.new(|cx| SystemMonitor::new(window, cx));
